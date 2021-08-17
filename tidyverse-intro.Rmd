@@ -1,0 +1,341 @@
+---
+title: "Tidyverse intro"
+date: "8/16/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## tidyverse overview
+
+From the website:
+
+"The tidyverse is an opinionated collection of R packages designed for data science. All packages share an underlying design philosophy, grammar, and data structures."
+
+The "core" tidyverse packages are the ones automatically install/loaded:
+
+```{r}
+library(tidyverse)
+```
+
+
+They form a [complete workflow](https://www.tidyverse.org/packages/) for writing most R programs:
+
+* `readr` for reading/writing rectangular data
+* `tidyr` for cleaning and organizing data
+* `dplyr` and `purrr` for manipulating and summarizing
+* `forcats` and `stringr` for special operations on factors/strings
+
+## tibbles
+
+The most fundamental data structure for `tidyverse` is a modernization of the dataframe. The most important differences are clearer printing and more flexible column names.
+
+```{r}
+(dat <- starwars)
+```
+
+### Creating tibbles
+
+`read_*` always returns a tibble. Creating tibbles from scratch can be done similar to `data.frame`:
+
+```{r}
+tibble(x = 1:5, y = LETTERS[1:5], z = x^2)
+```
+
+or with `tribble`
+
+```{r}
+tribble(
+  ~x, ~y,
+  1, 'A',
+  2, 'B',
+  3, 'C'
+)
+```
+
+
+Creating tibbles from dataframes, matrices, or named vectors:
+
+```{r, echo=FALSE}
+as_tibble(cars)
+
+x <- c(a = 1, b = 2, c = 3)
+enframe(x)
+```
+
+You can largely use tibbles and dataframes interchangeably (functions that say they work with one will work with the other), so I'll just call them dataframes from now on. See the vignette for more features and differences from regular dataframes
+
+```
+vignette('tibble')
+```
+
+### Tidy data
+
+[R for Data Science](https://r4ds.had.co.nz/tidy-data.html) gives three rules for tidy data:
+
+1. Each variable has its own column
+2. Each observation has its own row
+3. Each value must have its own cell
+
+The `tidyr` package contains functions for making data tidy.
+
+...
+
+```{r}
+nrow(dat)
+nrow(drop_na(dat)) # drop all rows with an NA
+nrow(drop_na(dat, birth_year)) # only rows with NA in "birth_year"
+```
+
+## Dplyr
+
+The `dplyr` package is great for performing seemingly endless operations on dataframes. Just like in base R, we can subset a dataframe by rows or columns:
+
+```{r, echo=FALSE}
+## select specific cols
+dat[,c(2, 6)]
+select(dat, height, eye_color)
+
+dat[,1:5]
+select(dat, name:skin_color)
+
+## select last 5 rows
+tail(dat, 5)
+slice_tail(dat, n = 5)
+
+## all cols with an underscore
+dat[, which(str_detect(colnames(dat), '_'))]
+select(dat, contains('_'))
+```
+
+More complex slicing and subsetting is possible
+
+```{r, echo=FALSE}
+## select cols conditionally
+select(dat, where(is.double))
+select(dat, !last_col() & ends_with('s'))
+
+## slice rows conditionally (filtering)
+filter(dat, eye_color == 'blue')
+```
+
+### The pipe operator
+
+Notice that most tidyverse functions are verbs or adverbs (coding is, after all, just giving instructions). There is a special operator, the _pipe_ operator, which allows these commands to be chained together!
+
+As an example, let's create a random "population" of 1,000 of the starwars characters:
+
+```{r}
+dat |> # start of chain is the data
+  filter(eye_color == 'blue') |> # each step takes the previous result
+  select(height:species) |> # and does a new thing to it
+  drop_na() |>
+  slice_sample(n = 1000, replace = TRUE)
+```
+
+`x |> f |> g` is the same as `g(f(x))`; however, when you string alot of functions together piping makes things more readable.
+
+### Mutate, summarize, and count
+
+Another family of `dplyr` functions use existing columns to make new ones. The most common is `mutate`, which appends a new row based on a vectorized function of existing rows.
+
+```{r}
+dat |>
+  mutate(mass_per_cm = mass / height)
+```
+
+This function, like many others, is often useful to apply seperately to different _groups_ in the data. 
+
+```{r}
+dat |>
+  group_by(homeworld) |>
+  mutate(world_id = str_c(homeworld, '_', 1:n())) |>
+  pull(world_id)
+```
+
+Grouping is frequently used with `summarize`. Summarizing is a form of reduction; it takes a (grouped) dataframe and returns a new dataframe with one row per group:
+
+```{r}
+dat |>
+  group_by(gender) |>
+  drop_na(height) |>
+  summarize(m_height = mean(height), sd_height = sd(height))
+```
+
+A more complex example, grouping by two groups, then simulating a distribution for `mass`, based on the observations from each group
+
+```{r}
+mass_sim <- dat |>
+  group_by(eye_color, hair_color) |> # notice the number of groups is printed
+  replace_na(list(mass = 0)) |> # replace NA with 0 in "mass" only
+  summarize(mass_boot = list(sample(mass, 1000, replace = TRUE))) |>
+  unnest(mass_boot) # un-collapses the list by repeating the other rows
+
+## make a histogram for one group
+mass_sim |>
+  filter(eye_color == 'black', hair_color == 'none') |>
+  pull(mass_boot) |>
+  hist()
+```
+
+<!-- Grouping is not just for summarizing. We have seen it can be useful with mutate, and it is useful with `slice_*` too: -->
+
+<!-- ```{r} -->
+<!-- dat |> -->
+<!--   group_by(birth_year) |> -->
+<!--   filter() -->
+<!-- ``` -->
+
+
+Finally, the `count` function is for the common summarizing task of counting groups:
+
+```{r}
+count(dat, homeworld, sort = TRUE)
+```
+
+Count group cominations by providing $>1$ column name, and use `add_count` to add the counts to the existing data.
+
+## Pivoting
+
+Recall that tidy data is supposed to have one column per variable, and one row per observation. As we will see soon, plotting is one case where the ambiguity of "variable" and "observation" matters. For this other cases, there are ways to _pivot_ the data, changing the context of variables and observations.
+
+### Lengthening data
+
+Think of `pivot_longer` as lengthening the dataframe. Rather than every variable getting a row of values, we make one row of the variables and one of the values:
+
+```{r}
+x <- tribble(
+  ~A, ~B, ~C,
+  1, 2, 3,
+  4, 5, 6
+)
+
+x
+pivot_longer(x, everything())
+```
+
+An example with data, counting how many times each color appears anywhere:
+
+```{r}
+dat |>
+  pivot_longer(
+    hair_color:eye_color, 
+    names_to='attribute', 
+    values_to='color'
+  ) |>
+  count(color)
+```
+
+Here, since we want to count colors across several columns, we pivot these columns into a single column and then `count` it.
+
+## Plotting with ggplot
+
+Some of you may have used `ggplot2` before. The package has its own philosophy (the "grammar of graphics") that builds on those of all tidyverse packages and tidy data. Let's go over a few to help make sense of how `ggplot2` works:
+
+* Plots are made of _layers_. For ggplot, visual information is added to plots one "group" at a time, using _geometries_. For example, use `geom_point` to add points and `geom_histrogram` to add histogram bins. Multiple types of geometries can be layered onto the same plot.
+
+* Plots are an interpretation of relationships in the data. These relationships can be specified with _aesthetic mappings_. For example, if the points you are plotting come from two species, you can color points according to their species with the mapping `species -> color`.
+
+* A plot is an object that we can perform operations on. This means we can always continue to modify a plot by performing new steps, much like how the `|>` operator lets data be modified in single steps. For example, `scale_x_sqrt`  adds the instruction to take the square root of the
+variable on the x-axis before plotting. This also means that `ggplot2` objects can be stored in a variable in R to be used later.
+
+Here's a simple example to see each of these ideas at work:
+
+```{r}
+gg <- ggplot(data = diamonds, mapping = aes(x = price, y = carat, col = cut)) +
+  geom_point(shape = 1) # shape is a "static" argument here
+
+gg +
+  scale_x_log10() +
+  labs(x = 'Price', y = 'Carat', col = 'Cut quality') +
+  theme_bw()
+```
+
+Here we've plotted `price` by `carat` and colored the points according to `cut`. We then added some visual modifications on top of the stored plot `gg`.
+
+Breaking down each of the instructions, a basic anatomy of most ggplots is found:
+
+1. `ggplot` is the "master" function that sets a "blank slate." It is also where data and aesthetic mappings, common to all geoms, is specified.
+
+```{r}
+ggplot() # totally blank slate
+ggplot(diamonds, aes(price, carat)) # data and the coordinate system
+```
+
+2. `geom_*` functions add on layers of data. Notice that these functions also have a `data` and `mapping` argument. These can be used to override these arguments from `ggplot` for that geom only.
+
+3. Last come any modifications of the existing coordinates or geoms. This includes `scale_*`, renaming parts of the plot, and changing the theme.
+
+There are many geometries available, and the best way to learn them is to check out the cheatsheet and try them out on your own data. Rather than cover them here, we'll now focus on some common tasks and challenges.
+
+### Facetting
+
+Separating data into a group of several plots is done with _facets_:
+
+```{r}
+gg_hist <- ggplot(diamonds, aes(x = carat, fill = cut)) +
+  geom_histogram() +
+  facet_grid(cut ~ ., scales = 'free')
+```
+
+An example of a barplot (histogram for discrete variable) with 2d facetting:
+
+```{r}
+ggplot(diamonds, aes(x = clarity)) +
+  geom_bar(fill = 'lightblue') +
+  facet_grid(cut ~ color, scales = 'free')
+```
+
+### Changing color schemes and other scales
+
+There are tons of different approaches to customizing color with ggplot, and its easy to get overwhelmed! Here we'll focus on the essentials and leave you to research different color palettes or making your own.
+
+Basically, color is changed through scaling a color aesthetic (`col` or `fill`). Going back to our histogram example, here we use one of the color palettes provided by `RColorBrewer` for discrete variables:
+
+```{r}
+library(RColorBrewer)
+
+my_brew_pal <- brewer.pal(8, 'Set2')
+
+gg_hist +
+  scale_fill_discrete(type = my_brew_pal)
+```
+
+As we see above, a color palette can be stored and used in multiple plots. For presentations or papers, it can be nice to have a set of specific colors fixed for a variable of interest. An easy way to do this in ggplot is with `scale_*_manual`. Say we want all plots using a mapping with `cut` to have consistent colors:
+
+```{r}
+my_pal <- c('blue2', 'orangered', 'lightpink', 'springgreen', 'gold')
+names(my_pal) <- levels(diamonds$cut)
+
+gg_hist +
+  scale_fill_manual(values = my_pal)
+
+ggplot(diamonds, aes(price, carat, col = cut)) +
+  geom_point(alpha = 0.1, data = slice_sample(diamonds, prop = 0.1)) +
+  geom_smooth() +
+  scale_color_manual(values = my_pal) +
+  ylim(0, 3)
+```
+
+In general, use `scale_*_discrete` or `scale_*_continuous` if you want to provide existing palettes or do other scaling functions (we'll see another use of scale in a moment), and `scale_*_manual` for making a discrete palette by hand.
+
+Aesthetics other than color can be scaled in much the same way. A common example is shape:
+
+```{r}
+ggplot(starwars, aes(eye_color, height, shape = gender)) + # col is continuous here
+  geom_point(size = 2) +
+  scale_shape_manual(values = c(19, 1), na.value = 13)
+
+diamonds |>
+  mutate(car_bin = ifelse(carat < mean(carat), 'low_car', 'high_car')) |> 
+  group_by(car_bin, color) |> 
+  summarize(mpr = mean(price)) |>
+  ggplot(aes(color, mpr, shape = car_bin, group = car_bin)) +
+  geom_point() +
+  geom_line()
+```
+
+## Bonus: simulating data over multiple parameters
+
